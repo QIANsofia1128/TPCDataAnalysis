@@ -157,6 +157,66 @@ events_df = DF.from_csv!(Constants.get_events_file_path())
 IO.inspect(events_df)
 ```
 
+```elixir
+defmodule TimeParser do
+  @exampleString "2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"
+  @monthRegex ~r/^\d{4}-(\d{2})-\d{2}/
+  @dateRegex ~r/^\d{4}-\d{2}-(\d{2})/
+  @yearRegex ~r/^(\d{4})-\d{2}-\d{2}/
+  @hourRegex ~r/(\d{2}):\d{2}:\d{2}/
+  @minuteRegex ~r/\d{2}:(\d{2}):\d{2}/
+  @secondRegex ~r/\d{2}:\d{2}:(\d{2}.\d)/
+  @timezoneRegex ~r/\s([A-Za-z]+)\s[\w\/]+$/
+  
+  def get_month do
+    monthResult = Regex.run(@monthRegex, @exampleString)
+    Enum.at(monthResult, 1)
+  end
+
+  def get_date do
+    dateResult = Regex.run(@dateRegex, @exampleString)
+    Enum.at(dateResult, 1)
+  end
+
+  def get_year do
+    yearResult = Regex.run(@yearRegex, @exampleString)
+    Enum.at(yearResult, 1)
+  end
+
+  def get_hour do
+    hourResult = Regex.run(@hourRegex, @exampleString)
+    Enum.at(hourResult, 1)
+  end
+
+  def get_minute do
+    minuteResult = Regex.run(@minuteRegex, @exampleString)
+    Enum.at(minuteResult, 1)
+  end
+
+  def get_second do
+    secondResult = Regex.run(@secondRegex, @exampleString)
+    secondResult = Enum.at(secondResult, 1)
+    #round up or down
+    decimal_digit = Enum.at(Regex.run(~r/\d{2}.(\d)/, secondResult), 1) #decimal digit in string format
+    decimal_digit = String.to_integer(decimal_digit) #converting decimal digit to integer
+    whole_number = Enum.at(Regex.run(~r/(\d{2}).\d/, secondResult), 1) #whole number in string format
+    whole_number = String.to_integer(whole_number) #converting whole number to integer
+    if decimal_digit >= 5 do
+      whole_number + 1
+    else 
+      whole_number - 1
+    end
+  end
+
+  def get_timezone do
+    timezone_result = Regex.run(@timezoneRegex, @exampleString)
+    Enum.at(timezone_result, 1)
+  end
+end
+
+IO.puts(TimeParser.get_timezone())
+```
+
 Data description goes here
 
 <!-- livebook:{"break_markdown":true} -->
@@ -172,4 +232,4 @@ detail description goes here
 
 ## Section 2: Data merging - Select all the useful columns
 
-<!-- livebook:{"offset":6550,"stamp":{"token":"XCP.ilmYGCR7W0D_qTnIJED5gsWu6P71PvXMOqCGoP9FvDeBwMl71E4QzagAonZ-GGGz_Jba6_5FaqkYcTmVhmVtM6G2PJD_GvhR_au96g","version":2}} -->
+<!-- livebook:{"offset":8279,"stamp":{"token":"XCP.CADvmw0mHbva70HGWQriHTyIUoxHkmlRKwWdbuusNdz3QG-VdvqxfDO2sKDQcetpQxF4Bpd04m-1Fjr1aCEEnV1-tcGtqQxFU5x2-A","version":2}} -->
