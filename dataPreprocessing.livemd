@@ -8,7 +8,8 @@ Mix.install([
   {:explorer, "~> 0.8.0"},
   {:kino_explorer, "~> 0.1.18"},
   {:vega_lite, "~> 0.1.8"},
-  {:kino_vega_lite, "~> 0.1.3"}
+  {:kino_vega_lite, "~> 0.1.3"},
+  {:tzdata, "~> 1.1"}
 ])
 ```
 
@@ -159,62 +160,119 @@ IO.inspect(events_df)
 
 ```elixir
 defmodule TimeParser do
-  @exampleString "2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"
   @monthRegex ~r/^\d{4}-(\d{2})-\d{2}/
   @dateRegex ~r/^\d{4}-\d{2}-(\d{2})/
   @yearRegex ~r/^(\d{4})-\d{2}-\d{2}/
   @hourRegex ~r/(\d{2}):\d{2}:\d{2}/
   @minuteRegex ~r/\d{2}:(\d{2}):\d{2}/
-  @secondRegex ~r/\d{2}:\d{2}:(\d{2}.\d)/
-  @timezoneRegex ~r/\s([A-Za-z]+)\s[\w\/]+$/
+  @secondRegex ~r/\d{2}:\d{2}:(\d{2}).\d/
+  @microsecondRegex ~r/\d{2}:\d{2}:\d{2}.(\d{6})/
+  @timezoneRegex ~r/\s[A-Za-z]+\s([\w\/]+)$/
   
-  def get_month do
-    monthResult = Regex.run(@monthRegex, @exampleString)
-    Enum.at(monthResult, 1)
+  def get_month(time_text) do
+    month_result = Regex.run(@monthRegex, time_text)
+    month_result = Enum.at(month_result, 1)
+    String.to_integer(month_result)
   end
 
-  def get_date do
-    dateResult = Regex.run(@dateRegex, @exampleString)
-    Enum.at(dateResult, 1)
+  def get_date(time_text) do
+    date_result = Regex.run(@dateRegex, time_text)
+    date_result = Enum.at(date_result, 1)
+    String.to_integer(date_result)
   end
 
-  def get_year do
-    yearResult = Regex.run(@yearRegex, @exampleString)
-    Enum.at(yearResult, 1)
+  def get_year(time_text) do
+    year_result = Regex.run(@yearRegex, time_text)
+    year_result = Enum.at(year_result, 1)
+    String.to_integer(year_result)
   end
 
-  def get_hour do
-    hourResult = Regex.run(@hourRegex, @exampleString)
-    Enum.at(hourResult, 1)
+  def get_hour(time_text) do
+    hour_result = Regex.run(@hourRegex, time_text)
+    hour_result = Enum.at(hour_result, 1)
+    String.to_integer(hour_result)
   end
 
-  def get_minute do
-    minuteResult = Regex.run(@minuteRegex, @exampleString)
-    Enum.at(minuteResult, 1)
+  def get_minute(time_text) do
+    minute_result = Regex.run(@minuteRegex, time_text)
+    minute_result = Enum.at(minute_result, 1)
+    String.to_integer(minute_result)
   end
 
-  def get_second do
-    secondResult = Regex.run(@secondRegex, @exampleString)
-    secondResult = Enum.at(secondResult, 1)
-    #round up or down
-    decimal_digit = Enum.at(Regex.run(~r/\d{2}.(\d)/, secondResult), 1) #decimal digit in string format
-    decimal_digit = String.to_integer(decimal_digit) #converting decimal digit to integer
-    whole_number = Enum.at(Regex.run(~r/(\d{2}).\d/, secondResult), 1) #whole number in string format
-    whole_number = String.to_integer(whole_number) #converting whole number to integer
-    if decimal_digit >= 5 do
-      whole_number + 1
-    else 
-      whole_number - 1
-    end
+  def get_second(time_text) do
+    second_result = Regex.run(@secondRegex, time_text)
+    second_result = Enum.at(second_result, 1)
+    String.to_integer(second_result)
   end
 
-  def get_timezone do
-    timezone_result = Regex.run(@timezoneRegex, @exampleString)
+  def get_timezone(time_text) do
+    timezone_result = Regex.run(@timezoneRegex, time_text)
     Enum.at(timezone_result, 1)
+  end
+
+  def get_microsecond(time_text) do
+    microsecond_result = Regex.run(@microsecondRegex, time_text)
+    microsecond_result = Enum.at(microsecond_result, 1)
+    String.to_integer(microsecond_result)
   end
 end
 
-IO.puts(TimeParser.get_timezone())
+IO.puts(TimeParser.get_timezone("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"))
+
+#DF.dtypes(filtered_dataset)
+year = TimeParser.get_year("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+month = TimeParser.get_month("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+date = TimeParser.get_date("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+{:ok, date}=Date.new(year, month , date)
+
+hour = TimeParser.get_hour("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+min= TimeParser.get_minute("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+sec = TimeParser.get_second("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+microsec = TimeParser.get_microsecond("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
+{:ok, time} = Time.new(hour, min, sec, microsec)
+DateTime.new(date, time, TimeParser.get_timezone("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"), Tzdata.TimeZoneDatabase)
+
+
+
+
+
+```
+
+```elixir
+# Convert DataFrame to a list of maps
+events_map_list = DF.to_rows(events_df)
+
+generate_dateTime_diff = fn str1, str2 ->
+  {:ok, entered_date} = Date.new(TimeParser.get_year(str1), TimeParser.get_month(str1), TimeParser.get_date(str1))
+  {:ok, entered_time} = Time.new(TimeParser.get_hour(str1), TimeParser.get_minute(str1), TimeParser.get_second(str1), TimeParser.get_microsecond(str1))  
+  {:ok, entered_dateTime} = DateTime.new(entered_date, entered_time, TimeParser.get_timezone(str1), Tzdata.TimeZoneDatabase)
+  #get the exited date
+  {:ok, exited_date} = Date.new(TimeParser.get_year(str2), TimeParser.get_month(str2), TimeParser.get_date(str2))
+  {:ok, exited_time} = Time.new(TimeParser.get_hour(str2), TimeParser.get_minute(str2), TimeParser.get_second(str2), TimeParser.get_microsecond(str2))
+  {:ok, exited_dateTime} = DateTime.new(exited_date, exited_time, TimeParser.get_timezone(str2), Tzdata.TimeZoneDatabase)
+
+  DateTime.diff(entered_dateTime, exited_dateTime)
+end
+
+# Process every 2 rows together
+new_rows =
+  events_map_list
+  |> Enum.chunk_every(2)
+  |> Enum.flat_map(fn
+    [row1, row2] ->
+      time_diff = generate_dateTime_diff.(row2["Ocurrió en"], row1["Ocurrió en"])
+      IO.puts(time_diff)
+      [
+        Map.put(row1, "time differences (sec)", time_diff),
+        Map.put(row2, "time differences (sec)", time_diff)
+      ]
+  end)
+
+# Convert back to DataFrame
+event_df =DF.new(new_rows)
+
+#IO.inspect(new_df)
+
 ```
 
 Data description goes here
@@ -232,4 +290,4 @@ detail description goes here
 
 ## Section 2: Data merging - Select all the useful columns
 
-<!-- livebook:{"offset":8279,"stamp":{"token":"XCP.CADvmw0mHbva70HGWQriHTyIUoxHkmlRKwWdbuusNdz3QG-VdvqxfDO2sKDQcetpQxF4Bpd04m-1Fjr1aCEEnV1-tcGtqQxFU5x2-A","version":2}} -->
+<!-- livebook:{"offset":10675,"stamp":{"token":"XCP.zLr3xwgjDIwfoIwDsGQ9fUjVwo1w7AThTtv1VVw1faq8j1Mocd9LLr75JAFCpxjtPjg54RwJn767UpvdSe7OxOpgVcN8h6qxnbx3Aw","version":2}} -->
