@@ -64,6 +64,8 @@ answers_df = DF.filter_with(answers_df, fn answers_df -> Explorer.Series.is_not_
 IO.inspect(answers_df)
 ```
 
+We observe that the "Texto de la respuesta" + "Seleccion en la respuesta" represents the same piece of informaiton. Moreover, we are using Ml models later on where "Texto de la respuesta" seems to be more useful. We remove "Seleccion en la respuesta"
+
 ```elixir
 answers_df = DF.discard(answers_df, ["Texto de la respuesta"])
 ```
@@ -338,4 +340,4 @@ new_rows =
 participation_df = DF.new(new_rows)
 ```
 
-<!-- livebook:{"offset":13651,"stamp":{"token":"XCP.SS5BCPo6nacxFAPVsSmnn7LajhYWGXLK8jn6sRg-Y-43eUzsNxWnLydz_sBh8Mdrv2dAo51PB110hknVyOwTG3AcoYUGo3Vp2AVn-w","version":2}} -->
+<!-- livebook:{"offset":13903,"stamp":{"token":"XCP.t_Lpj9ZziZ91a5lj8EvRN0QH4TUI2jahRHUKi2TQUmbWL07iGQoGGfX2u4S117G1D0gO9vzllkIoRKTm00L6FTkzEspR5hA_Nur33w","version":2}} -->
