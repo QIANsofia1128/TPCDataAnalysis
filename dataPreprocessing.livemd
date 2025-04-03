@@ -158,6 +158,21 @@ events_df = DF.from_csv!(Constants.get_events_file_path())
 IO.inspect(events_df)
 ```
 
+From the this dataset, we can see that it contains the time of when the student enteres and exits the platform (recorded in the column of "Ocurrío en"). With this piece of information we can generate some interesting data that can be useful for our model:
+
+1. Each time a student enters the platform, how long do they stay? Longer time on the platform may refer to better student engagement
+2. How frequently does a student enters to the platform? As in, the number of "entered" event. A higher frequency may reflect to higher engagement level
+
+Let's generate the data from the 1st point. To start with let's observe the data type of each column.
+
+```elixir
+DF.dtypes(events_df)
+```
+
+We can see that the "Ocurrío en" column contains a string datatype.
+
+In Elixir, there is an interesting module DateTime that represents a special data structure for date and time. More interestingly, there is a built-in function that directly computes the time differences in seconds. To generate this data structure, we need different information such as year, month, date, time, timezone, etc. So what we need to do first is to gather all this information from the string. Hence, a special module is created, called "TimeParser"
+
 ```elixir
 defmodule TimeParser do
   @monthRegex ~r/^\d{4}-(\d{2})-\d{2}/
@@ -217,42 +232,25 @@ defmodule TimeParser do
   end
 end
 
-IO.puts(TimeParser.get_timezone("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"))
-
-#DF.dtypes(filtered_dataset)
-year = TimeParser.get_year("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-month = TimeParser.get_month("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-date = TimeParser.get_date("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-{:ok, date}=Date.new(year, month , date)
-
-hour = TimeParser.get_hour("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-min= TimeParser.get_minute("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-sec = TimeParser.get_second("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-microsec = TimeParser.get_microsecond("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid")
-{:ok, time} = Time.new(hour, min, sec, microsec)
-DateTime.new(date, time, TimeParser.get_timezone("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"), Tzdata.TimeZoneDatabase)
-
-
-
-
-
+#IO.puts(TimeParser.get_timezone("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"))
 ```
 
 ```elixir
-# Convert DataFrame to a list of maps
-events_map_list = DF.to_rows(events_df)
-
-generate_dateTime_diff = fn str1, str2 ->
-  {:ok, entered_date} = Date.new(TimeParser.get_year(str1), TimeParser.get_month(str1), TimeParser.get_date(str1))
-  {:ok, entered_time} = Time.new(TimeParser.get_hour(str1), TimeParser.get_minute(str1), TimeParser.get_second(str1), TimeParser.get_microsecond(str1))  
-  {:ok, entered_dateTime} = DateTime.new(entered_date, entered_time, TimeParser.get_timezone(str1), Tzdata.TimeZoneDatabase)
+#define a function to determine the time differences in seconds
+generate_dateTime_diff_from_str = fn str1, str2 ->
+  entered_date = Date.new!(TimeParser.get_year(str1), TimeParser.get_month(str1), TimeParser.get_date(str1))
+  entered_time = Time.new!(TimeParser.get_hour(str1), TimeParser.get_minute(str1), TimeParser.get_second(str1), TimeParser.get_microsecond(str1))  
+  entered_dateTime = DateTime.new!(entered_date, entered_time, TimeParser.get_timezone(str1), Tzdata.TimeZoneDatabase)
   #get the exited date
-  {:ok, exited_date} = Date.new(TimeParser.get_year(str2), TimeParser.get_month(str2), TimeParser.get_date(str2))
-  {:ok, exited_time} = Time.new(TimeParser.get_hour(str2), TimeParser.get_minute(str2), TimeParser.get_second(str2), TimeParser.get_microsecond(str2))
-  {:ok, exited_dateTime} = DateTime.new(exited_date, exited_time, TimeParser.get_timezone(str2), Tzdata.TimeZoneDatabase)
+  exited_date = Date.new!(TimeParser.get_year(str2), TimeParser.get_month(str2), TimeParser.get_date(str2))
+  exited_time = Time.new!(TimeParser.get_hour(str2), TimeParser.get_minute(str2), TimeParser.get_second(str2), TimeParser.get_microsecond(str2))
+  exited_dateTime = DateTime.new!(exited_date, exited_time, TimeParser.get_timezone(str2), Tzdata.TimeZoneDatabase)
 
   DateTime.diff(entered_dateTime, exited_dateTime)
 end
+
+# Convert DataFrame to a list of maps
+events_map_list = DF.to_rows(events_df)
 
 # Process every 2 rows together
 new_rows =
@@ -260,7 +258,7 @@ new_rows =
   |> Enum.chunk_every(2)
   |> Enum.flat_map(fn
     [row1, row2] ->
-      time_diff = generate_dateTime_diff.(row2["Ocurrió en"], row1["Ocurrió en"])
+      time_diff = generate_dateTime_diff_from_str.(row2["Ocurrió en"], row1["Ocurrió en"])
       IO.puts(time_diff)
       [
         Map.put(row1, "time differences (sec)", time_diff),
@@ -275,9 +273,30 @@ event_df =DF.new(new_rows)
 
 ```
 
-Data description goes here
+Let's now focus on the second piece of information that we want to gather. That is, the "entered" frequency. We will be generating a new dataset to store this piece of information.
 
-<!-- livebook:{"break_markdown":true} -->
+```elixir
+participants_list = DF.select(events_df, ["Participante"])
+participants_list = DF.distinct(participants_list, ["Participante"])
+participants_list = DF.to_rows(participants_list)
+#Process each row
+new_rows = 
+  participants_list
+  |> Enum.map(fn
+    participant-> 
+      # filter the database based on participants name + "entered" event
+      participant_name = participant["Participante"]
+      participant_data =
+        events_df
+          |> DF.filter_with(fn events_df -> Explorer.Series.equal(events_df["Participante"], participant_name) end)
+          |> DF.filter_with(fn events_df -> Explorer.Series.equal(events_df["Tipo de evento"], "entered") end)
+      frequency = DF.n_rows(participant_data)
+      # 
+      Map.put(participant,"Entered frequency", frequency)
+  end)
+
+frequency_df = DF.new(new_rows)
+```
 
 Initial inspection into **participation.csv**
 
@@ -286,8 +305,37 @@ participation_df = DF.from_csv!(Constants.get_participation_file_path())
 IO.inspect(participation_df)
 ```
 
-detail description goes here
+This dataset contains very important information that we could use directly. Such as, time following the course, number of video reproduced, boolean variable to represent whether a course has been studied at least 75%, etc. However, there is one more information that we could calculate. That is, how long a student has been enrolled up until today. this information can be usefull for the following insight:
 
-## Section 2: Data merging - Select all the useful columns
+1. If a student has been enrolled for a long time but has very low participation (e.g. low number of video has been watched), they might be at risk of dropping out.
+2. Students who have been enrolled longer might show better engagement.
+3. If most students who stay enrolled for a long time don’t complete the course, it may indicate the course is not engaging or is too difficult.
 
-<!-- livebook:{"offset":10675,"stamp":{"token":"XCP.zLr3xwgjDIwfoIwDsGQ9fUjVwo1w7AThTtv1VVw1faq8j1Mocd9LLr75JAFCpxjtPjg54RwJn767UpvdSe7OxOpgVcN8h6qxnbx3Aw","version":2}} -->
+```elixir
+#current time in UTC
+current_time = DateTime.now!("Etc/UTC") 
+#convert current time to CET
+current_time = DateTime.shift_zone!(current_time, "Europe/Madrid", Tzdata.TimeZoneDatabase)
+
+# Convert DataFrame to a list of maps
+participation_map_list = DF.to_rows(participation_df)
+# Process every rows 
+new_rows =
+  participation_map_list
+  |> Enum.map(fn
+    row -> 
+      # compute duration in second from the first enrollment date until now 
+      enrolment_duration = generate_dateTime_diff_from_str.(DateTime.to_string(current_time), row["Hora comienzo curso"])
+      # recalculate the duration into n days for better interpretation
+      n_days = round(enrolment_duration / 86400)
+      
+      row
+      |>Map.put("Enrolment duration (sec)", enrolment_duration)
+      |>Map.put("Enrolment duration (days)", n_days)
+  end)
+
+# Convert back to DataFrame
+participation_df = DF.new(new_rows)
+```
+
+<!-- livebook:{"offset":13651,"stamp":{"token":"XCP.SS5BCPo6nacxFAPVsSmnn7LajhYWGXLK8jn6sRg-Y-43eUzsNxWnLydz_sBh8Mdrv2dAo51PB110hknVyOwTG3AcoYUGo3Vp2AVn-w","version":2}} -->
