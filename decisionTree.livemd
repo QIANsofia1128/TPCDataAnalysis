@@ -1,0 +1,449 @@
+# Decision Tree
+
+```elixir
+Mix.install([
+  {:req, "~> 0.4.8"},
+  {:explorer, "~> 0.8.0"},
+  {:kino_explorer, "~> 0.1.18"},
+  {:vega_lite, "~> 0.1.8"},
+  {:kino_vega_lite, "~> 0.1.3"},
+  {:tzdata, "~> 1.1"},
+  {:nx, "~> 0.9.0"},
+  {:scholar, "~> 0.1", github: "elixir-nx/scholar"},
+  {:evision, "~> 0.2"},
+  {:pythonx, "~> 0.4.0"}
+])
+```
+
+## Prepare data for desision tree
+
+```elixir
+Pythonx.uv_init("""
+[project]
+name = "project"
+version = "0.0.0"
+requires-python = "==3.13.*"
+dependencies = [
+  "numpy",
+   "pandas",
+  "scikit-learn",
+  "matplotlib"
+]
+""")
+```
+
+```elixir
+require Explorer.DataFrame, as: DF
+require Explorer.Series, as: Series
+require VegaLite, as: Vl
+```
+
+```elixir
+cluster_label_df = DF.from_csv!("/Users/qianqian/final-profile-label.csv")
+```
+
+```elixir
+df = DF.from_csv!("/Users/qianqian/answers-questions-event.csv")
+```
+
+```elixir
+df =
+  DF.join(df, cluster_label_df,
+    how: :left,
+    on: [
+      {"StudentID", "Participant ID"}
+    ]
+  )
+
+df = DF.shuffle(df, seed: 100)
+```
+
+```elixir
+df1 = DF.discard(df, ["Question", "Answer", "final_total_time_video_days", "ID Actividad", "StudentID"])
+#DF.to_csv!(df, "decisionTree_data.csv")
+feature_df = DF.discard(df1, ["Answered"])
+label_df = DF.select(df1, ["Answered"])
+```
+
+```elixir
+label_tensor = Nx.stack(label_df, axis: -1) 
+data_tensor = Nx.stack(feature_df, axis: -1)
+IO.inspect("label data shape: #{inspect(Nx.shape(label_tensor))}")
+IO.inspect("data data shape: #{inspect(Nx.shape(data_tensor))}")
+```
+
+```elixir
+label_binary = Nx.as_type(label_tensor, {:f, 32}) |> Nx.to_binary()
+data_binary = Nx.as_type(data_tensor, {:f, 32}) |> Nx.to_binary()
+
+data_mat = Evision.Mat.from_binary(
+  data_binary,       # Raw binary data
+  {:f, 32},             # Data type (float 64 for continuous data)
+  56466,                # Number of rows
+  4,                    # Number of columns (features)
+  1                     # Number of channels (1 because it's tabular data, not image data)
+)
+
+label_mat = Evision.Mat.from_binary(
+  label_binary,       # Raw binary data
+  {:f, 32},             # Data type (float 64 for continuous data)
+  56466,                # Number of rows
+  1,                    # Number of columns (features)
+  1                     # Number of channels (1 because it's tabular data, not image data)
+)
+
+dataset =
+  Evision.ML.TrainData.create(
+    data_mat,
+    Evision.Constant.cv_ROW_SAMPLE(),
+    label_mat
+  )
+  |> Evision.ML.TrainData.setTrainTestSplitRatio(0.8, shuffle: true)
+
+IO.puts("#Samples: #{Evision.ML.TrainData.getNSamples(dataset)}")
+IO.puts("#Training samples: #{Evision.ML.TrainData.getNTrainSamples(dataset)}")
+IO.puts("#Test samples: #{Evision.ML.TrainData.getNTestSamples(dataset)}")
+```
+
+## Random Tree Model - Evision module
+
+```elixir
+rtree =
+  Evision.ML.RTrees.create()
+  |> Evision.ML.RTrees.setMaxDepth(10)
+  |> Evision.ML.RTrees.setMaxCategories(3)
+  |> Evision.ML.RTrees.setCVFolds(0)
+  |> Evision.ML.RTrees.setMinSampleCount(10)
+  |> Evision.ML.RTrees.setActiveVarCount(0)
+  |> Evision.ML.RTrees.setCalculateVarImportance(false)
+
+rtree =
+  Evision.ML.RTrees.setTermCriteria(
+    rtree,
+    {Evision.Constant.cv_MAX_ITER() + Evision.Constant.cv_EPS(), 30, 5.0e-5}
+  )
+
+(
+  (
+    dataset =
+      Evision.ML.TrainData.create(
+        data_mat,
+        Evision.Constant.cv_ROW_SAMPLE(),
+        label_mat
+      )
+      |> Evision.ML.TrainData.setTrainTestSplitRatio(0.8, shuffle: true)
+
+    IO.puts("#Samples: #{Evision.ML.TrainData.getNSamples(dataset)}")
+    IO.puts("#Training samples: #{Evision.ML.TrainData.getNTrainSamples(dataset)}")
+    IO.puts("#Test samples: #{Evision.ML.TrainData.getNTestSamples(dataset)}")
+  )
+
+  Evision.ML.RTrees.train(rtree, dataset)
+
+  rtree
+  |> Evision.ML.RTrees.calcError(dataset, false)
+  |> then(&IO.puts("Training Error: #{elem(&1, 0)}"))
+
+  rtree
+  |> Evision.ML.RTrees.calcError(dataset, true)
+  |> then(&IO.puts("Test Error: #{elem(&1, 0)}"))
+)
+```
+
+## Decision Tree - Evision module
+
+```elixir
+dtree =
+  Evision.ML.DTrees.create()
+  |> Evision.ML.DTrees.setMaxDepth(5)
+  |> Evision.ML.DTrees.setMaxCategories(2)
+  |> Evision.ML.DTrees.setCVFolds(0)
+  |> Evision.ML.DTrees.setMinSampleCount(10)
+
+(
+  Evision.ML.DTrees.train(dtree, dataset)
+
+  dtree
+  |> Evision.ML.DTrees.calcError(dataset, false)
+  |> then(&IO.puts("Training Error: #{elem(&1, 0)}"))
+
+  dtree
+  |> Evision.ML.DTrees.calcError(dataset, true)
+  |> then(&IO.puts("Test Error: #{elem(&1, 0)}"))
+)
+```
+
+```elixir
+defmodule Metrics do
+  def confusion_matrix(y_true, y_pred, num_classes) do
+    zero = Nx.broadcast(0, {num_classes, num_classes})
+
+    Enum.reduce(0..(Nx.axis_size(y_true, 0) - 1), zero, fn i, acc ->
+      true_val = Nx.to_number(y_true[i])
+      pred_val = Nx.to_number(y_pred[i])
+      acc
+      |> Nx.indexed_add(Nx.tensor([[true_val, pred_val]]), Nx.tensor([1]))
+    end)
+  end
+end
+
+```
+
+```elixir
+{_test_error, results} = Evision.ML.DTrees.calcError(dtree, dataset, true)
+
+y_true =
+  Evision.Mat.to_nx(results, Nx.BinaryBackend)
+  |> Nx.reshape({:auto})
+  |> Nx.as_type(:s32)
+
+y_pred =
+  Evision.Mat.to_nx(Evision.ML.TrainData.getTestResponses(dataset), Nx.BinaryBackend)
+  |> Nx.reshape({:auto})
+  |> Nx.as_type(:s32)
+
+conf_mat = Metrics.confusion_matrix(y_true, y_pred, 2)
+
+```
+
+```elixir
+defmodule ModelSaverAndLoader do
+  def save_model(model) do
+    # save to file
+    filename = Path.join(__DIR__, "dtree.bin")
+    Evision.ML.DTrees.save(model, filename)
+  end
+
+  def load_model(filename) do
+    dtree_from_file = Evision.ML.DTrees.load(filename)
+  end
+end
+
+```
+
+```elixir
+ModelSaverAndLoader.save_model(dtree)
+```
+
+```elixir
+labels = ["0", "1"]
+
+# Convert to a list of maps for plotting
+data =
+  for i <- 0..1, j <- 0..1 do
+    %{
+      :"True Label" => labels |> Enum.at(i),
+      :"Predicted Label" => labels |> Enum.at(j),
+      :Count => Nx.to_number(conf_mat[i][j])
+    }
+  end
+
+vl =
+  VegaLite.new(width: 600, height: 400)
+  |> VegaLite.data_from_values(data)
+  |> VegaLite.mark(:rect)
+  |> VegaLite.encode_field(:x, "Predicted Label", type: :ordinal)
+  |> VegaLite.encode_field(:y, "True Label", type: :ordinal)
+  |> VegaLite.encode_field(:color, "Count", type: :quantitative)
+
+
+
+Kino.VegaLite.new(vl)
+```
+
+## Decision Tree using Python
+
+```elixir
+import Pythonx
+
+x = 1
+
+~PY"""
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+
+df = pd.read_csv("/Users/qianqian/decisionTree_data.csv")
+
+X = df.iloc[:, 1:5]
+y = df.iloc[:, 0] 
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=17, test_size=0.2)
+
+print("Xtrain size:", X_train.shape)
+print("Xtest size:", X_test.shape)
+print("ytrain size:", y_train.shape)
+print("ytest size:", y_test.shape)
+
+dtc = DecisionTreeClassifier()
+dtc.fit(X_train, y_train)
+
+y_pred = dtc.predict(X_test)
+print(classification_report(y_test, y_pred))
+print(dtc.feature_importances_)
+features = pd.DataFrame(dtc.feature_importances_, index=X.columns)
+print(features.head())
+"""
+```
+
+## ONE-HOT ENCODING
+
+```elixir
+encoding_df =
+  DF.to_rows(df1)
+  |> Enum.map(fn row ->
+  cluster = row["cluster"]
+  type = row["Type_Index"]
+  category = row["Category_Index"]
+
+  is_inactive = case cluster do
+    0 -> 1
+    _ -> 0
+  end
+
+  is_younger = case cluster do
+    2 -> 1
+    _ -> 0
+  end
+
+  is_older = case cluster do
+    1 -> 1
+    _ -> 0
+  end
+#question type
+  is_mcq = case type do
+    0 -> 1
+    _ -> 0
+  end 
+  
+  is_likert = case type do
+    1 -> 1
+    _ -> 0
+  end 
+
+  is_profile = case category do
+    1 -> 1
+    _ -> 0
+  end 
+
+  is_selfpre_selfpost = case category do
+    4 -> 1
+    _ -> 0
+  end 
+
+  is_access = case category do
+    0 -> 1
+    _ -> 0
+  end 
+
+  is_feedback = case category do
+    3 -> 1
+    _ -> 0
+  end 
+
+  is_satisfaction = case category do
+    5 -> 1
+    _ -> 0
+  end 
+
+  is_usability = case category do
+    6 -> 1
+    _ -> 0
+  end 
+
+  row
+    |> Map.put("is_inactive", is_inactive)
+    |> Map.put("is_younger", is_younger)
+    |> Map.put("is_older", is_older)
+    |> Map.put("is_mcq", is_mcq)
+    |> Map.put("is_likert", is_likert)
+    |> Map.put("is_profile", is_profile)
+    |> Map.put("is_access", is_access)
+    |> Map.put("is_feedback", is_feedback)
+    |> Map.put("is_satisfaction", is_satisfaction)
+    |> Map.put("is_selfpre_selfpost", is_selfpre_selfpost)
+    |> Map.put("is_usability", is_usability)
+    end) |> DF.new() |> DF.discard(["cluster", "Type_Index", "Category_Index"])
+
+#DF.to_csv!(encoding_df, "decisionTree_data_encoding.csv")
+```
+
+```elixir
+import Pythonx
+
+x = 1
+
+~PY"""
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.tree import DecisionTreeClassifier, export_text, plot_tree
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+
+df = pd.read_csv("/Users/qianqian/decisionTree_data_encoding.csv")
+
+X = df.iloc[:, 1:13]
+y = df.iloc[:, 0] 
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=17, test_size=0.2)
+
+print("Xtrain size:", X_train.shape)
+print("Xtest size:", X_test.shape)
+print("ytrain size:", y_train.shape)
+print("ytest size:", y_test.shape)
+
+dtc = DecisionTreeClassifier()
+dtc.fit(X_train, y_train)
+
+y_pred = dtc.predict(X_test)
+print(classification_report(y_test, y_pred))
+print(dtc.feature_importances_)
+features = pd.DataFrame(dtc.feature_importances_, index=X.columns)
+print(features)
+
+tree_rules = export_text(dtc, feature_names=list(X.columns))
+print(tree_rules)
+"""
+```
+
+## Random Tree Forest using Python
+
+```elixir
+import Pythonx
+
+x = 1
+
+~PY"""
+import numpy as np
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.metrics import confusion_matrix
+from sklearn.metrics import classification_report
+
+df = pd.read_csv("/Users/qianqian/decisionTree_data_encoding.csv")
+
+X = df.iloc[:, 1:13]
+y = df.iloc[:, 0] 
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, random_state=17, test_size=0.2)
+
+print("Xtrain size:", X_train.shape)
+print("Xtest size:", X_test.shape)
+print("ytrain size:", y_train.shape)
+print("ytest size:", y_test.shape)
+
+dtc = RandomForestClassifier(n_estimators=100, random_state=42)
+dtc.fit(X_train, y_train)
+
+y_pred = dtc.predict(X_test)
+print(classification_report(y_test, y_pred))
+print(dtc.feature_importances_)
+features = pd.DataFrame(dtc.feature_importances_, index=X.columns)
+print(features)
+"""
+```

@@ -1,0 +1,397 @@
+# Student performance
+
+```elixir
+Mix.install(
+  [
+    {:req, "~> 0.4.8"},
+    {:explorer, "~> 0.8.0"},
+    {:kino_explorer, "~> 0.1.18"},
+    {:vega_lite, "~> 0.1.8"},
+    {:kino_vega_lite, "~> 0.1.3"},
+    {:nx, "~> 0.7.0"},
+    {:scholar, "~> 0.3.0"},
+    {:kino_bumblebee, "~> 0.5.0"},
+    {:exla, ">= 0.0.0"},
+    {:tucan, "~> 0.3.0"}
+  ])
+```
+
+## Logistic Regression - Elixir
+
+```elixir
+require Explorer.DataFrame, as: DF
+require Explorer.Series, as: Series
+require VegaLite, as: Vl
+```
+
+```elixir
+cluster_label_df = DF.from_csv!("/Users/qianqian/final-profile-label.csv")
+```
+
+```elixir
+student_participation_df = DF.from_csv!("/Users/qianqian/student-performance.csv")
+```
+
+```elixir
+df =
+  DF.join(student_participation_df, cluster_label_df,
+    how: :left,
+    on: [
+      {"ID de participante", "Participant ID"}
+    ]
+  ) 
+  
+df = DF.filter_with(df, fn student ->
+        Series.is_not_nil(student["cluster"])
+  end)
+
+df = DF.shuffle(df, seed: 100)
+```
+
+```elixir
+df = DF.discard(df, ["ID de participante", "course_is_finished"])
+#DF.to_csv!(df, "CNN_data.csv")
+feature_df = DF.discard(df, ["at least 7.5h"])
+label_df = DF.select(df, ["at least 7.5h"])
+
+label_tensor = Nx.stack(label_df, axis: -1) 
+data_tensor = Nx.stack(feature_df, axis: -1)
+```
+
+Models like Logistic Regression assume that features are on similar scales.
+
+If one feature has values in the millions (e.g. time in seconds), and another is 0 or 1 (like a binary flag), the model will be biased toward the large-scale features — even if they’re not more important.
+
+Standardization fixes that imbalance.
+
+```elixir
+defmodule DataTransform do
+  require Scholar.Preprocessing, as: SP
+  
+  def standardized(data_tensor) do
+    scaler = SP.StandardScaler.fit(data_tensor)
+    SP.StandardScaler.transform(scaler, data_tensor)
+  end
+end
+```
+
+```elixir
+data_tensor = DataTransform.standardized(data_tensor)
+```
+
+```elixir
+split_index = round(0.8 * Nx.axis_size(data_tensor, 0))
+
+{x_train, x_test} = Nx.split(data_tensor, split_index)
+{y_train, y_test} = Nx.split(label_tensor, split_index)
+
+IO.inspect(Nx.shape(x_train), label: "x_train shape")
+IO.inspect(Nx.shape(y_train), label: "y_train shape")
+IO.inspect(Nx.shape(x_test), label: "x_test shape")
+IO.inspect(Nx.shape(y_test), label: "y_test shape")
+```
+
+```elixir
+model = Scholar.Linear.LogisticRegression.fit(x_train, Nx.squeeze(y_train), num_classes: 2, iterations: 200)
+
+```
+
+The model performance can be affected by the number of iteration. Hence a range of options are tested and the accuracy is collected:
+
+* 100 iterations -> 74.2
+* 200 iterations -> 74.3
+* 300 iterations -> 60.5
+* 400 iterations -> 70.9
+* 500 iterations -> 35.4
+* 600 iterations -> 74.3
+* 700 iterations -> 74.3
+* 800 iterations -> 28.6
+* 900 iterations -> 74.3
+* 1000 iterations -> 74.3
+
+The model seems to fluctuate in performance, which could suggest instability in optimization. We can see that at 200 iterations, it already reaches its highest accuracy, and it doesn't really improve fterward, we're likely to converge by then. Hence we chose 200 iterations.
+
+```elixir
+defmodule Metrics do
+  alias Nx
+
+  def confusion_matrix(y_true, y_pred, num_classes) do
+    zero = Nx.broadcast(0, {num_classes, num_classes})
+
+    Enum.reduce(0..(Nx.axis_size(y_true, 0) - 1), zero, fn i, acc ->
+      true_val = Nx.to_number(y_true[i])
+      pred_val = Nx.to_number(y_pred[i])
+      Nx.indexed_add(acc, Nx.tensor([[true_val, pred_val]]), Nx.tensor([1]))
+    end)
+  end
+
+  # Calculate precision per class: TP / (TP + FP)
+  def precision(conf_mat) do
+    tp = conf_mat[0][0]
+    fp = conf_mat[0][1]
+    Nx.divide(tp, Nx.add(tp, fp))
+  end
+
+
+  # Calculate recall per class: TP / (TP + FN)
+  def recall(conf_mat) do
+    tp = conf_mat[0][0]
+    fn_ = conf_mat[1][0]
+    Nx.divide(tp, Nx.add(tp, fn_))
+  end
+
+  # Calculate F1 score per class: 2 * (precision * recall) / (precision + recall)
+  def f1_score(conf_mat) do
+    p = precision(conf_mat)
+    r = recall(conf_mat)
+
+    numerator = Nx.multiply(2, Nx.multiply(p, r))
+    denominator = Nx.add(p, r)
+
+    # Avoid division by zero
+    Nx.select(Nx.equal(denominator, 0), Nx.tensor(0), Nx.divide(numerator, denominator))
+  end
+
+  def accuracy(y_pred, y_test) do
+    correct = Nx.equal(y_pred, Nx.squeeze(y_test))
+    Nx.mean(correct)
+  end
+
+  # Macro function to compute metrics together
+  def classification_report(y_true, y_pred, num_classes) do
+    cm = confusion_matrix(y_true, y_pred, num_classes)
+    %{
+      confusion_matrix: cm,
+      precision: precision(cm),
+      recall: recall(cm),
+      f1_score: f1_score(cm),
+      accuracy: accuracy(y_pred, y_true),
+    }
+  end
+
+end
+```
+
+```elixir
+y_pred = Scholar.Linear.LogisticRegression.predict(model, x_test)
+```
+
+```elixir
+report = Metrics.classification_report( Nx.squeeze(y_test), y_pred, 2)
+```
+
+Description of the confusion matrix:
+
+* The model never predicted class 0 correctly because TN = 0.
+* The model predicted 45 samples as class 1 when they were actually class 0 (false positives).
+* The model never missed a class 1 sample (FN = 0).
+* The model correctly predicted 130 samples as class 1.
+
+Possible reason:
+The model is heavily biased towards predicting class 1. It predicts no samples as class 0, which is why TN and FN are zero. This might happen if the model learned to always predict class 1 because it’s the majority class or due to imbalance.
+
+## Logistic Regression: Balancing the data (undersampling)
+
+```elixir
+# Separate the classes
+finished = DF.filter_with(df, fn student ->
+        Series.equal(student["course_is_finished"], 1)
+      end)
+
+not_finished = DF.filter_with(df, fn student ->
+        Series.equal(student["course_is_finished"], 0)
+      end)
+
+# Get count of minority class
+n = DF.n_rows(not_finished)
+
+# Downsample the majority class
+downsampled_finished = DF.sample(finished, n, replace: false)
+
+#Generate data
+balanced_df = DF.concat_rows([downsampled_finished, not_finished]) |> DF.shuffle()
+```
+
+```elixir
+#DF.to_csv!(balanced_df, "CNN_data_undersample.csv")
+feature_df = DF.discard(balanced_df, ["course_is_finished"])
+label_df = DF.select(balanced_df, ["course_is_finished"])
+
+label_tensor = Nx.stack(label_df, axis: -1) 
+data_tensor = Nx.stack(feature_df, axis: -1)
+
+data_tensor = DataTransform.standardized(data_tensor)
+
+split_index = round(0.8 * Nx.axis_size(data_tensor, 0))
+
+{x_train, x_test} = Nx.split(data_tensor, split_index)
+{y_train, y_test} = Nx.split(label_tensor, split_index)
+
+IO.inspect(Nx.shape(x_train), label: "x_train shape")
+IO.inspect(Nx.shape(y_train), label: "y_train shape")
+IO.inspect(Nx.shape(x_test), label: "x_test shape")
+IO.inspect(Nx.shape(y_test), label: "y_test shape")
+```
+
+```elixir
+model = Scholar.Linear.LogisticRegression.fit(x_train, Nx.squeeze(y_train), num_classes: 2, iterations: 400)
+y_pred = Scholar.Linear.LogisticRegression.predict(model, x_test)
+report = Metrics.classification_report( Nx.squeeze(y_test), y_pred, 2)
+```
+
+The model performance can be affected by the number of iteration. Hence a range of options are tested and the accuracy is collected:
+
+* 100 iterations -> 65.6
+* 200 iterations -> 47.3
+* 300 iterations -> 51.6
+* 400 iterations -> 65.6
+* 500 iterations -> 47.3
+* 600 iterations -> 51.6
+* 700 iterations -> 65.6
+* 800 iterations -> 47.3
+* 900 iterations -> 51.6
+* 1000 iterations -> 65.6
+
+Your accuracy oscillates between three repeating values, from 400 iterations. This suggests that convergence may be occurring by them. Hence we stick with 400 iterations
+
+```elixir
+#feature importance
+
+# Extract class 0 coefficients (column 0)
+col_0 = Nx.slice(model.coefficients, [0, 0], [7, 1]) |> Nx.squeeze()
+
+# Extract class 1 coefficients (column 1)
+col_1 = Nx.slice(model.coefficients, [0, 1], [7, 1]) |> Nx.squeeze()
+
+feature_names = DF.names(feature_df)
+
+#compute net influence of class 1
+influence_is_finished = Nx.subtract(col_1, col_0)
+odd_ratio = Nx.exp(influence_is_finished)
+
+coe_df = DF.new(%{
+  "Feature names" => DF.names(feature_df),
+  "net coefficient" => Nx.to_list(influence_is_finished),
+  "odd_ratio" => Nx.to_list(odd_ratio)
+})
+```
+
+* Activity (#events)    0.2200  A higher number of events or interactions (clicks, participations) suggests greater student engagement, which usually leads to better academic performance.
+* Enrolment duration (seconds)  1.9565  A large positive coefficient indicates that students who stay enrolled or connected longer tend to perform better. Time invested is crucial.
+* Number of responses   0.1347  More responses (to quizzes, forums, assignments) reflect active participation and commitment, associated with better learning outcomes.
+* Number of videos watched  0.1370  Watching more videos implies the student is consuming educational content, which positively impacts performance.
+* Last topic finished   0.1279  Completing the last topic shows progress and consistent study habits, linked to higher success.
+* Time following course (seconds)   5.3357  This is the highest coefficient, indicating that the total active time spent following the course is the most important factor influencing student success. More time means higher chances of good performance.
+
+## Logistic Regression: One hot encoding for cluster column
+
+```elixir
+encoding_df =
+  DF.to_rows(balanced_df)
+  |> Enum.map(fn row ->
+  category = row["cluster"]
+
+  is_inactive = case category do
+    0 -> 1
+    _ -> 0
+  end
+
+  is_younger = case category do
+    2 -> 1
+    _ -> 0
+  end
+
+  is_older = case category do
+    1 -> 1
+    _ -> 0
+  end
+    
+
+  row
+    |> Map.put("is_inactive", is_inactive)
+    |> Map.put("is_younger", is_younger)
+    |> Map.put("is_older", is_older)
+    end) |> DF.new() |> DF.discard(["cluster"])
+```
+
+```elixir
+DF.to_csv!(encoding_df, "CNN_data_encoding.csv")
+feature_df = DF.discard(encoding_df, ["course_is_finished"])
+label_df = DF.select(encoding_df, ["course_is_finished"])
+
+label_tensor = Nx.stack(label_df, axis: -1) 
+data_tensor = Nx.stack(feature_df, axis: -1)
+
+data_tensor = DataTransform.standardized(data_tensor)
+
+split_index = round(0.8 * Nx.axis_size(data_tensor, 0))
+
+{x_train, x_test} = Nx.split(data_tensor, split_index)
+{y_train, y_test} = Nx.split(label_tensor, split_index)
+
+IO.inspect(Nx.shape(x_train), label: "x_train shape")
+IO.inspect(Nx.shape(y_train), label: "y_train shape")
+IO.inspect(Nx.shape(x_test), label: "x_test shape")
+IO.inspect(Nx.shape(y_test), label: "y_test shape")
+```
+
+```elixir
+model = Scholar.Linear.LogisticRegression.fit(x_train, Nx.squeeze(y_train), num_classes: 2, iterations: 8
+  00)
+y_pred = Scholar.Linear.LogisticRegression.predict(model, x_test)
+report = Metrics.classification_report( Nx.squeeze(y_test), y_pred, 2)
+```
+
+The model performance can be affected by the number of iteration. Hence a range of options are tested and the accuracy is collected:
+
+* 100 iterations -> 69.9
+* 200 iterations -> 45.2
+* 300 iterations -> 69
+* 400 iterations -> 45.2
+* 500 iterations -> 45.2
+* 600 iterations -> 45.2
+* 700 iterations -> 56
+* 800 iterations -> 65.6
+* 900 iterations -> 76
+* 1000 iterations -> 55
+
+The model reached its optimal accuracy at 900 iterations, hence we select that one.
+
+```elixir
+col_0 = Nx.slice(model.coefficients, [0, 0], [9, 1]) |> Nx.squeeze()
+
+# Extract class 1 coefficients (column 1)
+col_1 = Nx.slice(model.coefficients, [0, 1], [9, 1]) |> Nx.squeeze()
+
+feature_names = DF.names(feature_df)
+
+#compute net influence of class 1
+influence_is_finished = Nx.subtract(col_1, col_0)
+odd_ratio = Nx.exp(influence_is_finished)
+
+coe_df = DF.new(%{
+  "Feature names" => DF.names(feature_df),
+  "net coefficient" => Nx.to_list(influence_is_finished),
+  "odd_ratio" => Nx.to_list(odd_ratio)
+})
+```
+
+* Number of events: more interactions or actions in the platform are mildly associated with better performance, likely reflecting some level of engagement.
+* Enrolment duration:   A strong positive coefficient suggests that students who stay enrolled longer tend to perform better — indicating commitment and exposure to course content over time.
+* Number of responses:  Negative effect: giving more responses may reflect confusion?
+* Number of videos watched: More videos watched correlates negatively with performance here — possibly because students struggling with the material need to rewatch content, indicating lack of understanding.
+* is_inactive (binary flag) =   Being marked as inactive strongly reduces the probability of success. Inactivity usually means disengagement, missed content, or lack of progress.
+* is_older (e.g., adult learner)    = Older students may have lower success rates in this dataset, potentially due to competing responsibilities (e.g., work, family) or learning gaps.
+* is_younger (e.g., minors or teens)    = younger students may also perform worse, possibly due to less maturity, focus, or self-regulated learning skills.
+* Last topic finished    = Not completing the final topic is negatively associated with success,which is expected — lower course completion typically means lower performance.
+* Time following course (sec)   = This is the strongest positive coefficient: the more active time students spend following the course, the more likely they are to succeed.
+
+If we compare the 3 groups of people that we have (less than 50, more than 50, inactive), we will rank them as follows (from most negative to least negative):
+
+1. is_inactive
+2. is_younger
+3. is_older
+
+From this ranking, we can conclude that being inactive (is_inactive) has the worst impact on student success among the three. Then we have older people (above 50) that has the least impact on the probability of success and are more likely to complete the course amongst other groups of people. This is because they are finding this course useful, and they are actually learning with this online course. Unlike younger people who might think that this course is teaching something that they might have already known and find it too easy, leading then to drop the course halfway through.
+
+## Gradient Boosted Trees - Elixir

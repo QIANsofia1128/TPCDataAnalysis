@@ -1,0 +1,262 @@
+# Data understanding
+
+```elixir
+Mix.install([
+  {:req, "~> 0.4.8"},
+  {:explorer, "~> 0.8.0"},
+  {:kino_explorer, "~> 0.1.18"},
+  {:vega_lite, "~> 0.1.8"},
+  {:kino_vega_lite, "~> 0.1.3"},
+  {:tzdata, "~> 1.1"},
+  {:scholar, "~> 0.3.0"},
+  {:tucan, "~> 0.5.0"}
+])
+```
+
+## 1. Exploring "respuesta.csv"
+
+```elixir
+require Explorer.DataFrame, as: DF
+require Explorer.Series, as: Series
+require VegaLite, as: Vl
+```
+
+```elixir
+answers_df = DF.from_csv!("/Users/qianqian/TPCDataAnalysis/RealData/answers-aaf7180-2025-04-22 14_17_28.csv")
+```
+
+```elixir
+DF.dtypes(answers_df)
+```
+
+## 1.1 Student distribution
+
+```elixir
+student_age_df = DF.filter_with(answers_df, fn answers_df -> Explorer.Series.equal(answers_df["ID de pregunta"], "a30f78cc-f230-4851-a98d-5aaf2bf8bc19") end)
+
+grouped_age_df =
+  student_age_df
+      |> DF.group_by("Texto de la respuesta")
+    |> DF.summarise_with(&[count: Series.count(&1["Selección en la respuesta"])])
+
+#Draw bar chart 
+bar_chart = 
+Vl.new(width: 600, height: 400)
+|> Vl.data_from_values(grouped_age_df)
+|> Vl.mark(:bar, clip: true)
+|> Vl.encode_field(:x, "Texto de la respuesta", title: "Age Range", axis: [label_angle: 0])
+|> Vl.encode_field(:y, "count",
+  type: :quantitative,
+  title: "Count",
+  scale: [domain: [0, 280]]
+)
+
+Kino.VegaLite.new(bar_chart)
+```
+
+## 1.2 Student satisfaction level
+
+```elixir
+student_age_df = DF.filter_with(answers_df, fn answers_df -> Explorer.Series.equal(answers_df["Categoría de la pregunta"], "satisfaction") end)
+```
+
+```elixir
+grouped_satisfaction_df = DF.filter_with(answers_df, fn answers_df -> Explorer.Series.equal(answers_df["ID de pregunta"], "eeec01ae-5b90-4d63-b400-5fd5ecd862b1") end)
+
+grouped_satisfaction_df =
+  grouped_satisfaction_df
+      |> DF.group_by("Texto de la respuesta")
+    |> DF.summarise_with(&[count: Series.count(&1["Selección en la respuesta"])])
+
+#Draw bar chart 
+bar_chart = 
+Vl.new(width: 600, height: 400)
+|> Vl.data_from_values(grouped_satisfaction_df)
+|> Vl.mark(:bar, clip: true)
+|> Vl.encode_field(:x, "Texto de la respuesta", title: "Satisfaction", axis: [label_angle: 0])
+|> Vl.encode_field(:y, "count",
+  type: :quantitative,
+  title: "Count",
+  scale: [domain: [0, 280]]
+)
+
+Kino.VegaLite.new(bar_chart)
+```
+
+## 2. Exploring "participacion.csv"
+
+```elixir
+participation_df = DF.from_csv!("/Users/qianqian/TPCDataAnalysis/RealData/participation-aaf7180-2025-04-22 14_17_51.csv")
+```
+
+```elixir
+DF.dtypes(participation_df)
+```
+
+## 2.1 Average Time Spent on Videos
+
+```elixir
+defmodule TimeParser do
+  @monthRegex ~r/^\d{4}-(\d{2})-\d{2}/
+  @dateRegex ~r/^\d{4}-\d{2}-(\d{2})/
+  @yearRegex ~r/^(\d{4})-\d{2}-\d{2}/
+  @hourRegex ~r/(\d{2}):\d{2}:\d{2}/
+  @minuteRegex ~r/\d{2}:(\d{2}):\d{2}/
+  @secondRegex ~r/\d{2}:\d{2}:(\d{2})/
+  @microsecondRegex ~r/\d{2}:\d{2}:\d{2}\.(\d{6})/
+  @timezoneRegex ~r/\s[A-Za-z]+\s([\w\/]+)$/
+
+  defp safe_extract_integer(regex, text) do
+    with true <- is_binary(text),
+         [_, value] <- Regex.run(regex, text),
+         {int, _} <- Integer.parse(value) do
+      int
+    else
+      _ -> 0
+    end
+  end
+
+  def get_hour(text), do: safe_extract_integer(@hourRegex, text)
+  def get_minute(text), do: safe_extract_integer(@minuteRegex, text)
+  def get_second(text), do: safe_extract_integer(@secondRegex, text)
+  def get_microsecond(text), do: safe_extract_integer(@microsecondRegex, text)
+  def get_month(text), do: safe_extract_integer(@monthRegex, text)
+  def get_date(text), do: safe_extract_integer(@dateRegex, text)
+  def get_year(text), do: safe_extract_integer(@yearRegex, text)
+
+  def get_timezone(text) when is_binary(text) do
+    case Regex.run(@timezoneRegex, text) do
+      [_, tz] -> tz
+      _ -> nil
+    end
+  end
+
+  def to_seconds(nil), do: 0
+
+  def to_seconds(time_str) do
+    h = get_hour(time_str)
+    m = get_minute(time_str)
+    s = get_second(time_str)
+    h * 3600 + m * 60 + s
+  end
+
+  def get_timezone(_), do: nil
+end
+```
+
+```elixir
+t_v =
+  participation_df["Tiempo mirando videos"]
+  |> Explorer.Series.to_list()
+  |> Enum.map(&TimeParser.to_seconds/1)
+
+t_c = 
+  participation_df["Tiempo siguiendo curso"]
+  |> Explorer.Series.to_list()
+  |> Enum.map(&TimeParser.to_seconds/1)
+
+participation_df =
+  participation_df
+  |> DF.put("time_watching_video_second", t_v)
+  |> DF.put("time_following_course_second", t_c)
+
+is_finished=
+  participation_df["time_watching_video_second"]
+  |> Explorer.Series.to_list()
+  |> Enum.map(fn time ->
+    if time >= 4320 do
+      "finished"
+    else
+      "not finished"
+    end
+  end)
+
+participation_df =
+  participation_df
+  |> DF.put("course_is_finished", is_finished)
+
+
+participation_df = DF.rename(participation_df, %{"Al menos 7h 30'" => "At least 7h 30"})
+
+  
+```
+
+```elixir
+plot = Tucan.boxplot(participation_df, "time_watching_video_second", color_by: "At least 7h 30", height: 100, width: 1000)
+```
+
+## 3. Exploring "event.csv"
+
+```elixir
+events_df = DF.from_csv!("/Users/qianqian/TPCDataAnalysis/RealData/events-aaf7180-2025-04-22 14_26_18.csv", dtypes: %{"Participante" => :string})
+```
+
+```elixir
+DF.dtypes(events_df)
+```
+
+```elixir
+df = DF.distinct(events_df, ["Tipo de actividad"])
+```
+
+```elixir
+df = DF.distinct(events_df, ["Tipo de evento"])
+```
+
+```elixir
+df = DF.distinct(events_df, ["Tipo de evento", "Tipo de actividad"])
+```
+
+```elixir
+resumed_video_df =
+  events_df
+  |> DF.filter_with(fn events_df -> Series.equal(events_df["Tipo de actividad"], "video") end)
+  |> DF.filter_with(fn events_df -> Series.equal(events_df["Tipo de evento"], "moved_backward") end)
+
+participants = DF.distinct(resumed_video_df, ["ID de participante"]) |> DF.pull("ID de participante")
+  |> Series.to_list() 
+
+# Compute counts for each participant
+counts =
+  for id <- participants do
+    count =
+      resumed_video_df
+      |> DF.filter_with(fn events_df -> Series.equal(events_df["ID de participante"], id) end)
+      |> DF.n_rows()
+
+    %{participant_id: id, move_backward_video_count: count}
+  end
+
+# Create a new DataFrame from the list of maps
+result_df = DF.new(counts)  
+  
+```
+
+```elixir
+plot = Tucan.boxplot(result_df, "move_backward_video_count", height: 100, width: 1000)
+```
+
+## 3.2 Student engagement
+
+```elixir
+participants = DF.distinct(events_df, ["ID de participante"]) |> DF.pull("ID de participante")
+  |> Series.to_list() 
+
+# Compute counts for each participant
+counts =
+  for id <- participants do
+    count =
+      events_df
+      |> DF.filter_with(fn events_df -> Series.equal(events_df["ID de participante"], id) end)
+      |> DF.n_rows()
+
+    %{participant_id: id, total_event_count: count}
+  end
+
+# Create a new DataFrame from the list of maps
+result_df = DF.new(counts)  
+```
+
+```elixir
+plot = Tucan.boxplot(result_df, "total_event_count", height: 100, width: 1000)
+```

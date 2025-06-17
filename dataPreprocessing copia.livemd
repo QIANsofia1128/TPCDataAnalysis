@@ -1,6 +1,6 @@
 <!-- livebook:{"file_entries":[{"file":{"file_system_id":"local","file_system_type":"local","path":"/Users/qianqian/TPCDataAnalysis/RealData/answers-aaf7180-2025-04-22 14_17_28.csv"},"name":"answers-aaf7180-2025-04-22_14_17_28.csv","type":"file"},{"file":{"file_system_id":"local","file_system_type":"local","path":"/Users/qianqian/TPCDataAnalysis/RealData/events-aaf7180-2025-04-22 14_26_18.csv"},"name":"events-aaf7180-2025-04-22_14_26_18.csv","type":"file"},{"file":{"file_system_id":"local","file_system_type":"local","path":"/Users/qianqian/tpcassets/priv/repo/new03.json"},"name":"new03.json","type":"file"},{"file":{"file_system_id":"local","file_system_type":"local","path":"/Users/qianqian/TPCDataAnalysis/RealData/participation-aaf7180-2025-04-22 14_17_51.csv"},"name":"participation-aaf7180-2025-04-22_14_17_51.csv","type":"file"},{"file":{"file_system_id":"local","file_system_type":"local","path":"/Users/qianqian/profile-clustering-4.csv"},"name":"profile-clustering-4.csv","type":"file"}]} -->
 
-# DataAnalysis
+# DataInspection+Preprocessing
 
 ```elixir
 Mix.install([
@@ -30,12 +30,14 @@ defmodule Constants do
   @answers_file_path "/Users/qianqian/TPCDataAnalysis/RealData/answers-aaf7180-2025-04-22 14_17_28.csv"
   @events_file_path "/Users/qianqian/TPCDataAnalysis/RealData/events-aaf7180-2025-04-22 14_26_18.csv"
   @participation_file_path "/Users/qianqian/TPCDataAnalysis/RealData/participation-aaf7180-2025-04-22 14_17_51.csv"
-  @clustering_label_file_path "/Users/qianqian/profile-sub-clustering-2.csv"
+  @clustering_label_file_path "/Users/qianqian/profile-clustering-filterCol-combCol-2.csv"
+  @clustering_label2_file_path "/Users/qianqian/profile-sub-clustering-2.csv"
   
   def get_answers_file_path, do: @answers_file_path
   def get_events_file_path, do: @events_file_path
   def get_participation_file_path, do: @participation_file_path
   def get_clustering_label_file_path, do: @clustering_label_file_path
+  def get_clustering_label2_file_path, do: @clustering_label2_file_path
 end
 ```
 
@@ -60,15 +62,24 @@ Different questions are divided into different categories, such as:
 6. **Satisfaction** - The level of satisfaccion after finishing the course
 7. **Usability** - Usability level of the entire course, hence it is asked after finishing the course
 
-## Gathering student profiles
+```elixir
+questions2category = DF.distinct(answers_df, ["Categoría de la pregunta", "Texto de la pregunta"])
+questions2type = DF.distinct(answers_df, ["Tipo de pregunta", "Texto de la pregunta"])
+```
 
 ```elixir
-profile_questions_list = 
-  answers_df
-  |> DF.select(["Categoría de la pregunta"])
-  |> DF.distinct(["Categoría de la pregunta"])
-  |> DF.to_rows()
+values = DF.pull(questions2category, "Categoría de la pregunta") |> Explorer.Series.to_list()
+keys = DF.pull(questions2category, "Texto de la pregunta") |> Explorer.Series.to_list()
+# Combining into a map
+question_category_map = Enum.zip(keys, values) |> Map.new()
+
+values = DF.pull(questions2type, "Tipo de pregunta") |> Explorer.Series.to_list()
+keys = DF.pull(questions2type, "Texto de la pregunta") |> Explorer.Series.to_list()
+# Combining into a map
+question_type_map = Enum.zip(keys, values) |> Map.new()
 ```
+
+## Gathering student profiles
 
 Just like we mentioned, we have different questionnaires throughout the course. What we are interested are mainly the student profile, where it includes all the academic backgrounds, etc. Especially when we want to perform a clustering technique. Therefore, I will retrieve those information independently, forming a unique dataset. By analyzing this dataset individually can also provide us an insight on the type of students that we have.
 
@@ -136,7 +147,6 @@ participants_list =
   |> DF.distinct(["ID de participante"])
   |> DF.to_rows()
 
-
 participants_profile_rows =
   Enum.map(participants_list, fn row ->
     ParticipantRowBuilder.build_participant_row_data(row, answers_df, column_values)
@@ -188,65 +198,102 @@ participant_rows =
 
 # Build the final DataFrame all at once
 questions_df = DF.new(participant_rows)
+#DF.to_csv!(questions_df, "all-questions.csv")
 ```
 
 ## Checking for questions that are not answered by the students
 
 Questions not answered by the student could potentially means either the student didn't wants to answer, or the student having difficulties of answering the questions. By having this in mind, we will not discard them. In fact we will make of them and consider them as a variable resource when predicting which questions will more likely to be not responded by the student.
 
-"We realised that not all the questions are answered by the students. Hence we discard them." -> This might be removed
+```elixir
+profile_questions_list
+```
 
 ```elixir
-long_form =
+question_categories = DF.distinct(answers_df, ["Categoría de la pregunta"])
+```
+
+```elixir
+question_types = DF.distinct(answers_df, ["Tipo de pregunta"])
+```
+
+```elixir
+keys = DF.pull(question_categories, "Categoría de la pregunta") |> Explorer.Series.to_list()
+values = Enum.to_list(0..length(keys)-1)
+# Zip into a map
+category_index_map = Enum.zip(keys, values) |> Map.new()
+
+keys = DF.pull(question_types, "Tipo de pregunta") |> Explorer.Series.to_list()
+values = Enum.to_list(0..length(keys)-1)
+# Zip into a map
+type_index_map = Enum.zip(keys, values) |> Map.new()
+```
+
+```elixir
+is_answered_df =
   DF.to_rows(questions_df)
   |> Enum.flat_map(fn row ->
-    student_id = row["Participant ID"]
-    IO.inspect(student_id)
+    student_id = row["Participant ID"] 
 
     row
     |> Enum.reject(fn {key, _} -> key == "Participant ID" end)  # Remove "Participant ID"
     |> Enum.map(fn {question_id, answer} ->
       %{
         "StudentID" => student_id,
-        "QuestionID" => question_id,
+        "Question" => question_id,
         "Answer" => answer,
-        "Answered" => if answer == -1 do 0 else 1 end
+        "Answered" => if answer == -1 do 0 else 1 end #1 for did answered, 0 for not answered
       }
       end)
   end)
   |> DF.new()
 
+
+is_answered_df =
+  DF.join(is_answered_df, answers_df,
+    how: :left,
+    on: [
+      {"StudentID", "ID de participante"},
+      {"Question", "Texto de la pregunta"}
+    ]
+  ) |> DF.select(["Answer", "Answered", "Question", "StudentID", "ID Actividad", "Categoría de la pregunta", "Tipo de pregunta"])
+
+transformed_rows =
+  DF.to_rows(is_answered_df)
+  |> Enum.map(fn row ->
+  category = row["Categoría de la pregunta"]
+  type = row["Tipo de pregunta"]
+
+  # Step 3: Convert the category to numerical index
+  category_index = case category do
+    "profile" -> 1
+    "selfpre" -> 4
+    "access" -> 0
+    "feedback" -> 3
+    "satisfaction" -> 5 
+    "selfpost" -> 4
+    "usability" -> 6
+    nil -> Map.get(category_index_map, Map.get(question_category_map, row["Question"]))  # -1 incase the student did not reply
+  end
+
+  type_index = case type do
+    "mcq" -> 0
+    "likert" -> 1
+    nil -> Map.get(type_index_map , Map.get(question_type_map, row["Question"])) # -1 incase the student did not reply
+  end
+
+
+  # Step 4: Add the new 'Category_Index' to the row
+  row
+    |> Map.put("Category_Index", category_index)
+    |> Map.put("Type_Index", type_index)
+    end) |> DF.new() |> DF.discard(["Categoría de la pregunta", "Tipo de pregunta"])
 ```
 
 We observe that the "Texto de la respuesta" + "Seleccion en la respuesta" represents the same piece of informaiton. Moreover, we are using Ml models later on where "Texto de la respuesta" seems to be more useful. We remove "Seleccion en la respuesta"
 
 ```elixir
 answers_df = DF.discard(answers_df, ["Texto de la respuesta"])
-```
-
-## Check for student's age distribution
-
-```elixir
-student_age_df = DF.filter_with(answers_df, fn answers_df -> Explorer.Series.equal(answers_df["ID de pregunta"], "a30f78cc-f230-4851-a98d-5aaf2bf8bc19") end)
-
-grouped_age_df =
-  student_age_df
-    |> DF.group_by("Selección en la respuesta")
-    |> DF.summarise_with(&[count: Series.count(&1["Selección en la respuesta"])])
-
-#Draw bar chart 
-bar_chart = 
-Vl.new(width: 600, height: 400)
-|> Vl.data_from_values(grouped_age_df)
-|> Vl.mark(:bar, clip: true)
-|> Vl.encode_field(:x, "Selección en la respuesta", title: "Age Range", axis: [label_angle: 0])
-|> Vl.encode_field(:y, "count",
-  type: :quantitative,
-  title: "Count",
-  scale: [domain: [0, 280]]
-)
-
-Kino.VegaLite.new(bar_chart)
 ```
 
 ## Inspection into events.csv
@@ -267,6 +314,10 @@ Let's generate the data from the 1st point. To start with let's observe the data
 DF.dtypes(events_df)
 ```
 
+```elixir
+different_event_df = DF.select(events_df, ["Tipo de evento"]) |> DF.distinct()
+```
+
 We can see that the "Ocurrío en" column contains a string datatype.
 
 In Elixir, there is an interesting module DateTime that represents a special data structure for date and time. More interestingly, there is a built-in function that directly computes the time differences in seconds. To generate this data structure, we need different information such as year, month, date, time, timezone, etc. So what we need to do first is to gather all this information from the string. Hence, a special module is created, called "TimeParser"
@@ -278,66 +329,54 @@ defmodule TimeParser do
   @yearRegex ~r/^(\d{4})-\d{2}-\d{2}/
   @hourRegex ~r/(\d{2}):\d{2}:\d{2}/
   @minuteRegex ~r/\d{2}:(\d{2}):\d{2}/
-  @secondRegex ~r/\d{2}:\d{2}:(\d{2}).\d/
-  @microsecondRegex ~r/\d{2}:\d{2}:\d{2}.(\d{6})/
+  @secondRegex ~r/\d{2}:\d{2}:(\d{2})/
+  @microsecondRegex ~r/\d{2}:\d{2}:\d{2}\.(\d{6})/
   @timezoneRegex ~r/\s[A-Za-z]+\s([\w\/]+)$/
-  
-  def get_month(time_text) do
-    month_result = Regex.run(@monthRegex, time_text)
-    month_result = Enum.at(month_result, 1)
-    String.to_integer(month_result)
+
+  defp safe_extract_integer(regex, text) do
+    with true <- is_binary(text),
+         [_, value] <- Regex.run(regex, text),
+         {int, _} <- Integer.parse(value) do
+      int
+    else
+      _ -> 0
+    end
   end
 
-  def get_date(time_text) do
-    date_result = Regex.run(@dateRegex, time_text)
-    date_result = Enum.at(date_result, 1)
-    String.to_integer(date_result)
+  def get_hour(text), do: safe_extract_integer(@hourRegex, text)
+  def get_minute(text), do: safe_extract_integer(@minuteRegex, text)
+  def get_second(text), do: safe_extract_integer(@secondRegex, text)
+  def get_microsecond(text), do: safe_extract_integer(@microsecondRegex, text)
+  def get_month(text), do: safe_extract_integer(@monthRegex, text)
+  def get_date(text), do: safe_extract_integer(@dateRegex, text)
+  def get_year(text), do: safe_extract_integer(@yearRegex, text)
+
+  def get_timezone(text) when is_binary(text) do
+    case Regex.run(@timezoneRegex, text) do
+      [_, tz] -> tz
+      _ -> nil
+    end
   end
 
-  def get_year(time_text) do
-    year_result = Regex.run(@yearRegex, time_text)
-    year_result = Enum.at(year_result, 1)
-    String.to_integer(year_result)
+  def to_seconds(nil), do: 0
+
+  def to_seconds(time_str) do
+    h = get_hour(time_str)
+    m = get_minute(time_str)
+    s = get_second(time_str)
+    h * 3600 + m * 60 + s
   end
 
-  def get_hour(time_text) do
-    hour_result = Regex.run(@hourRegex, time_text)
-    hour_result = Enum.at(hour_result, 1)
-    String.to_integer(hour_result)
-  end
-
-  def get_minute(time_text) do
-    minute_result = Regex.run(@minuteRegex, time_text)
-    minute_result = Enum.at(minute_result, 1)
-    String.to_integer(minute_result)
-  end
-
-  def get_second(time_text) do
-    second_result = Regex.run(@secondRegex, time_text)
-    second_result = Enum.at(second_result, 1)
-    String.to_integer(second_result)
-  end
-
-  def get_timezone(time_text) do
-    timezone_result = Regex.run(@timezoneRegex, time_text)
-    Enum.at(timezone_result, 1)
-  end
-
-  def get_microsecond(time_text) do
-    microsecond_result = Regex.run(@microsecondRegex, time_text)
-    microsecond_result = Enum.at(microsecond_result, 1)
-    String.to_integer(microsecond_result)
-  end
+  def get_timezone(_), do: nil
 end
 
-#IO.puts(TimeParser.get_timezone("2025-03-21 12:16:33.518269+01:00 CET Europe/Madrid"))
 ```
 
 ```elixir
 #define a function to determine the time differences in seconds
 generate_dateTime_diff_from_str = fn str1, str2 ->
-  entered_date = Date.new!(TimeParser.get_year(str1), TimeParser.get_month(str1), TimeParser.get_date(str1))
   entered_time = Time.new!(TimeParser.get_hour(str1), TimeParser.get_minute(str1), TimeParser.get_second(str1), TimeParser.get_microsecond(str1))  
+  entered_date = Date.new!(TimeParser.get_year(str1), TimeParser.get_month(str1), TimeParser.get_date(str1))
   entered_dateTime = DateTime.new!(entered_date, entered_time, TimeParser.get_timezone(str1), Tzdata.TimeZoneDatabase)
   #get the exited date
   exited_date = Date.new!(TimeParser.get_year(str2), TimeParser.get_month(str2), TimeParser.get_date(str2))
@@ -347,67 +386,115 @@ generate_dateTime_diff_from_str = fn str1, str2 ->
   DateTime.diff(entered_dateTime, exited_dateTime)
 end
 
-video_df = DF.filter_with(events_df, fn events_df -> Explorer.Series.equal(events_df["Tipo de actividad"], "video") end)
+#enter_exit_df =
+#  events_df
+#|> DF.filter_with( fn df ->
+#    col = df["Tipo de actividad"]
+#    cond_a = Explorer.Series.equal(col, "likert")
+#    cond_b = Explorer.Series.equal(col, "mcq")
+#    Explorer.Series.or(cond_a, cond_b)
+#  end)
+#|> DF.filter_with(fn df ->
+#    col = df["Tipo de evento"]
+#    cond_a = Explorer.Series.equal(col, "entered")
+#    cond_b = Explorer.Series.equal(col, "exited")
+#    Explorer.Series.or(cond_a, cond_b)
+#  end)
 
-enter_exit_df =
-  DF.filter_with(video_df, fn df ->
-    col = df["Tipo de evento"]
-    cond_a = Explorer.Series.equal(col, "entered")
-    cond_b = Explorer.Series.equal(col, "exited")
-    Explorer.Series.or(cond_a, cond_b)
-  end)
+#distinct_student_activities = 
+#  enter_exit_df
+#  |> DF.distinct(["ID Actividad","ID de participante"])
+#  |> DF.to_rows()
+#  |> Enum.map(fn %{"ID Actividad" => current_id, "ID de participante" => current_participant} ->
+#    df = 
+#      enter_exit_df
+#      |> DF.filter_with(fn enter_exit_df -> Explorer.Series.equal(enter_exit_df["ID Actividad"], current_id) end)
+#      |> DF.filter_with(fn enter_exit_df -> Explorer.Series.equal(enter_exit_df["ID de participante"], current_participant) end)
 
-video_df = 
-  enter_exit_df
-  |>DF.group_by( ["ID Actividad", "Participante"])
+#    entered_time = 
+#      df
+#      |> DF.filter_with(fn df -> Explorer.Series.equal(df["Tipo de evento"], "entered") end)
+#      |> DF.sort_with(&[&1["Ocurrió en"]])
+#      |> DF.head(1)
+#      |> DF.to_rows()
+#      |> List.first()
+#      |> Map.get("Ocurrió en")
 
-distinct_student_activities = 
-  enter_exit_df
-  |> DF.distinct(["ID Actividad","Participante"])
-  |> DF.to_rows()
-  |> Enum.map(fn %{"ID Actividad" => current_id, "Participante" => current_participant} ->
-    df = 
-      enter_exit_df
-      |> DF.filter_with(fn enter_exit_df -> Explorer.Series.equal(enter_exit_df["ID Actividad"], current_id) end)
-      |> DF.filter_with(fn enter_exit_df -> Explorer.Series.equal(enter_exit_df["Participante"], current_participant) end)
+#    exited_time =
+#      df
+#      |> DF.filter_with(fn df -> Explorer.Series.equal(df["Tipo de evento"], "exited") end)
+#      |> DF.sort_with(&[desc: &1["Ocurrió en"]])
+#      |> DF.head(1)
+#      |> DF.to_rows()
+#      |> List.first()
+#      |> case do
+#        nil -> 
+#          current_time = DateTime.now!("Etc/UTC") 
+#          #convert current time to CET
+#          current_time = DateTime.shift_zone!(current_time, "Europe/Madrid", Tzdata.TimeZoneDatabase)
+#          DateTime.to_string(current_time)
+#        row -> Map.get(row, "Ocurrió en")  
+#      end
 
-    entered_time = 
-      df
-      |> DF.filter_with(fn df -> Explorer.Series.equal(df["Tipo de evento"], "entered") end)
-      |> DF.sort_with(&[&1["Ocurrió en"]])
-      |> DF.head(1)
-      |> DF.to_rows()
-      |> List.first()
-      |> Map.get("Ocurrió en")
-
-    exited_time =
-      df
-      |> DF.filter_with(fn df -> Explorer.Series.equal(df["Tipo de evento"], "exited") end)
-      |> DF.sort_with(&[desc: &1["Ocurrió en"]])
-      |> DF.head(1)
-      |> DF.to_rows()
-      |> List.first()
-      |> case do
-        nil -> 
-          current_time = DateTime.now!("Etc/UTC") 
-          #convert current time to CET
-          current_time = DateTime.shift_zone!(current_time, "Europe/Madrid", Tzdata.TimeZoneDatabase)
-          DateTime.to_string(current_time)
-        row -> Map.get(row, "Ocurrió en")  
-      end
-
-    time_diff_sec = generate_dateTime_diff_from_str.(exited_time, entered_time)
+#    time_diff_sec = generate_dateTime_diff_from_str.(exited_time, entered_time)
     
-    %{
-      id: current_id,
-      participant: current_participant,
-      total_time_video_sec: time_diff_sec,
-      total_time_video_days: round(time_diff_sec / 86400)
-    }
-  end)
+#    %{
+#      id: current_id,
+#      participant: current_participant,
+#      total_time_video_sec: time_diff_sec,
+#      total_time_video_days: round(time_diff_sec / 86400)
+#    }
+#  end)
 
-total_video_time_df =DF.new(distinct_student_activities)
+#total_video_time_df =DF.new(distinct_student_activities)
 
+```
+
+```elixir
+total_video_time_df = DF.from_csv!("/Users/qianqian/questions-event.csv")
+```
+
+```elixir
+#DF.to_csv!(total_video_time_df, "questions-event.csv")
+total_video_time_df = DF.from_csv!("/Users/qianqian/questions-event.csv")
+is_answered_df =
+  DF.join(total_video_time_df, transformed_rows,
+    how: :right,
+    on: [
+      {"id", "ID Actividad"},
+      {"participant", "StudentID"}
+    ]
+  )
+```
+
+As we can see here, some row contains null days and sec. This is because there is no time recorded for the specific activity. In this case, we are handling questions activity ID, hence those rows represent those unreponded questions
+
+```elixir
+is_answered_df =
+  DF.to_rows(is_answered_df)
+  |> Enum.map(fn row ->
+  day = row["total_time_video_days"]
+  sec = row["total_time_video_sec"]
+
+  # Generating zero value when day and sec row data equal null
+  final_total_time_video_days = if day == nil do
+    0
+  else day
+  end
+
+  final_total_time_video_sec = if sec == nil do
+    0
+  else sec
+  end
+
+
+  # Step 4: Add the new 'Category_Index' to the row
+  row
+    |> Map.put("final_total_time_video_days", final_total_time_video_days)
+    |> Map.put("final_total_time_video_sec", final_total_time_video_sec)
+    end) |> DF.new() |> DF.discard(["total_time_video_days", "total_time_video_sec"])
+
+#DF.to_csv!(is_answered_df, "answers-questions-event.csv")
 ```
 
 Let's now focus on the second piece of information that we want to gather. That is, the "entered", "replayed", "move_backward" and "finished" frequency. We will be generating a new dataset to store these pieces of information. I will be
@@ -483,6 +570,87 @@ new_rows =
 
 # Convert back to DataFrame
 participation_df = DF.new(new_rows)
+```
+
+to determine whether the student can will be able to finish the course we can observe, whether the time watching the view is more than 7.5 hours.
+
+Let's remove the unnecessary columns first.
+
+```elixir
+participation_df = DF.discard(participation_df, ["Al menos ha visto un 75%", "Centro", "Curso", "Hora ultima actividad", "Hora ultimo actividad", "Participante", "Temario", "Hora comienzo curso"])
+```
+
+```elixir
+DF.dtypes(participation_df)
+```
+
+```elixir
+participation_df =
+  DF.to_rows(participation_df)
+  |> Enum.map(fn row ->
+  at_least_flag = row["Al menos 7h 30'"]
+  last_topic_finished = row["Último tema terminado"]
+
+  at_least_flag = case at_least_flag do
+    true -> 1
+    false -> 0
+    _ -> -1
+  end
+
+  last_topic_finished = case last_topic_finished do
+    true -> 1
+    false -> 0
+    _ -> -1
+  end
+
+  # Step 4: Add the new 'Category_Index' to the row
+  row
+    |> Map.put("at least 7.5h", at_least_flag)
+    |> Map.put("last topic finished", last_topic_finished)
+    end) 
+    |>DF.new()
+    |> DF.discard(["Al menos 7h 30'", "Último tema terminado"])
+
+```
+
+```elixir
+t_v =
+  participation_df["Tiempo mirando videos"]
+  |> Explorer.Series.to_list()
+  |> Enum.map(&TimeParser.to_seconds/1)
+
+t_c = 
+  participation_df["Tiempo siguiendo curso"]
+  |> Explorer.Series.to_list()
+  |> Enum.map(&TimeParser.to_seconds/1)
+
+participation_df =
+  participation_df
+  |> DF.put("time_watching_video_second", t_v)
+  |> DF.put("time_following_course_second", t_c)
+
+```
+
+```elixir
+is_finished =
+  participation_df["time_watching_video_second"]
+  |> Explorer.Series.to_list()
+  |> Enum.map(fn time ->
+    if time >= 4320 do
+      1
+    else
+      0
+    end
+  end)
+
+participation_df =
+  participation_df
+  |> DF.put("course_is_finished", is_finished)
+```
+
+```elixir
+participation_df = DF.discard(participation_df, ["time_watching_video_second", "Tiempo mirando videos", "Tiempo siguiendo curso", "Enrolment duration (days)"])
+                                                                                                                                                                                                                                                                                                                                                                                                              #ººººº1ºº11qDF.to_csv!(participation_df, "student-performance.csv")
 ```
 
 ## Clustering - Profile questions
@@ -623,7 +791,11 @@ end
 student_profile_df
 ```
 
-From this dataset we can see that the participant code column contains numerical values and string vaues. We need to convert the string value to a numerical value.
+```elixir
+df = DF.select(student_profile_df, ["¿Cuál es su país de nacimiento?"])
+```
+
+For machine learning purposes, we will be using tensor as a data structure for the model inputs.
 
 ```elixir
 tensor = Nx.stack(student_profile_df, axis: -1)
@@ -652,11 +824,19 @@ df_with_labels = DF.concat_columns(student_profile_df, cluster_df)
 #File.cwd!()
 ```
 
-we devide cluster = 2, however, If the clusters are too broad or unhelpful, you might:
+* 2 clusters -> Silhouette Score: 0.4453125125238959
+* 3 clusters-> Silhouette Score: 0.07989377306790536
+* 4 clusters-> Silhouette Score: 0.1313027585955213
+* 5 clusters->  Silhouette Score: 0.14019041511784322
+* 6 clusters-> Silhouette Score: 0.11184457767867173
+* 10 clusters-> Silhouette Score: 0.048957542856680476
 
-Try sub-clustering within each.
+From this we can see that All other options (3–10) show much lower cohesion and separation, suggesting the data does not naturally support more clusters.
+Even though 0.445 isn't extremely high, for categorical data using K-Modes, it’s a reasonable score, especially if the dataset is sparse or imbalanced.
+If the clusters are too broad or unhelpful, you might:
 
-Use feature selection to refine input variables (remove irrelevant ones).
+* Try sub-clustering within each.
+* Use feature selection to refine input variables (remove irrelevant ones).
 
 ## Feature selection
 
@@ -673,7 +853,9 @@ Even though 0.445 isn't extremely high, for categorical data using K-Modes, it�
 * Use feature selection to refine input variables (remove irrelevant ones).
 
 * ¿Cual es el país de nacimiento” -> removed, since only a couple are answered hence does not provide meaningful information
+
 * ¿Cuál fue el nivel más alto de estudios que cursó su madre? & ¿Cuál fue el nivel más alto de estudios que cursó su padre? -> These two feature  can be combinad using max. These features are semantically related — both reflect household education background. If treated separately, they may add redundant information. Combining them reduces dimensionality and simplifies clustering.
+
 * Chi-squared test -> for correlation. In case high correlation -> keep one that contains fewer missing values.
 
 ```elixir
@@ -693,6 +875,15 @@ IO.inspect(tensor_label)
 score = KModes.silhouette_score(filtered_student_result)
 IO.puts("Silhouette Score: #{score}")
 ```
+
+* 2-> Silhouette Score: 0.4453125125238959
+* 3-> Silhouette Score: 0.25224026519341247
+* 4 -> Silhouette Score: 0.1318984987189088
+* 5 ->  Silhouette Score: 0.13588691520357365
+* 6 -> Silhouette Score: 0.12828607767352374
+* 10 -> Silhouette Score: 0.11067767090068065
+
+After dropping a non-informative column, the clustering algorithm showed better convergence—especially for k=3—as evidenced by the improved Silhouette Score. This suggests that the removed column was likely adding noise or diluting meaningful distance relationships, a classic issue when dealing with high-dimensional or irrelevant features in clustering. -> A bit of improvement but somehow moderate
 
 ```elixir
 # Pull each column as lists
@@ -723,6 +914,15 @@ score = KModes.silhouette_score(combCol_filtered_student_result)
 IO.puts("Silhouette Score: #{score}")
 ```
 
+* 2-> Silhouette Score: 0.4535754484319116
+* 3-> Silhouette Score: 0.2462278684874294
+* 4 -> Silhouette Score: 0.15134027451958038
+* 5 ->  Silhouette Score: 0.13334222537704885
+* 6 -> Silhouette Score: 0.12239520690271541
+* 10 -> Silhouette Score: 0.1488067659185638
+
+After dropping a non-informative column, the clustering algorithm showed better convergence—especially for k=3—as evidenced by the improved Silhouette Score. This suggests that the removed column was likely adding noise or diluting meaningful distance relationships, a classic issue when dealing with high-dimensional or irrelevant features in clustering. -> A bit of improvement but somehow moderate
+
 ```elixir
 labels_list = Nx.to_flat_list(tensor_label)
 cluster_df = DF.new(cluster: labels_list)
@@ -732,13 +932,18 @@ df_with_labels = DF.concat_columns(combCol_filtered_student_df, cluster_df)
 #File.cwd!()
 ```
 
+```elixir
+cluster_label_df = DF.from_csv!("/Users/qianqian/profile-clustering-filterCol-combCol-2.csv")
+cluster_1_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end) |> DF.discard(["cluster"])
+```
+
 Removing the group of people who are inactive (in cluster 0). And perform sub-clustering
 
 ```elixir
 #Remove cluster 1 data
 cluster_label_df = DF.from_csv!(Constants.get_clustering_label_file_path())
 
-cluster_0_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end)
+#inactive_student_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end)
 cluster_1_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 1) end) |> DF.discard(["cluster"])
 
 tensor = Nx.stack(cluster_1_df, axis: -1)
@@ -756,6 +961,17 @@ score = KModes.silhouette_score(combCol_filtered_student_result)
 IO.puts("Silhouette Score: #{score}")
 ```
 
+* 2 -> 0.2816924454806636
+* 3 -> 0.14626411335260775
+* 4 -> 0.09000429925925206
+* 5 -> 0.08142707359772193
+* 6 -> 0.07386940990796322
+* 10-> 0.07194138845280322
+
+```elixir
+inactive_student_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end)
+```
+
 ```elixir
 labels_list = Nx.to_flat_list(tensor_label)
 cluster_df = DF.new(cluster: labels_list)
@@ -766,24 +982,46 @@ df_with_labels = DF.concat_columns(cluster_1_df, cluster_df)
 ```
 
 ```elixir
-cluster_label_df = DF.from_csv!(Constants.get_clustering_label_file_path())
-cluster_label_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end)
+defmodule DataSummariser do
+  alias Explorer.DataFrame, as: DF
+  alias Explorer.Series
+  require VegaLite, as: Vl
 
-grouped_age_df =
-  cluster_label_df
-    |> DF.group_by("Educación más alta de padres")
-    |> DF.summarise_with(&[count: Series.count(&1["Educación más alta de padres"])])
+  def generate_frequency_per_group(df, col_name) do
+    df
+    |> DF.group_by(col_name)
+    |> DF.summarise_with(&[
+      count: Series.count(&1[col_name])
+    ])
 
+  end
+end
 ```
-
-## Decision tree
-
-Now that we have the clusters, we can use these label as one of the features for our binary tree model. Looking for answers for the following questions: Which questions are more likely to be not responded by the student.
 
 ```elixir
-cluster_label_df = DF.from_csv!(Constants.get_clustering_label_file_path())
-
-entered_df = DF.filter_with(cluster_label_df, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end)
+#generate new df with new cluster label after second clustering
+cluster_label_df2 = DF.from_csv!("/Users/qianqian/profile-sub-clustering-2.csv")
+cluster_label_df2 = DF.mutate(cluster_label_df2, cluster: cluster + 1)
 ```
 
-<!-- livebook:{"offset":31503,"stamp":{"token":"XCP.-uLj2Ad5TDdvh8frNhurQFFfAJ4FrswRRMYeeeEX-qmOxAfdlALVWHOx7I-Qm3mpJ1VM1DddV9E_N5Q-pKMGkzXpddQS9IxRBW5rFA","version":2}} -->
+```elixir
+cluster_label_df2 = DF.filter_with(cluster_label_df2, fn events_df -> Explorer.Series.equal(events_df["cluster"], 2) end)
+summary = DataSummariser.generate_frequency_per_group(cluster_label_df2, "¿Entiende la lengua española?")
+
+```
+
+```elixir
+#get the inactive participants after the first clustering
+cluster_label_df1 = DF.from_csv!(Constants.get_clustering_label_file_path())
+cluster_label_df1 = DF.filter_with(cluster_label_df1, fn events_df -> Explorer.Series.equal(events_df["cluster"], 0) end)
+
+#generate new df with new cluster label after second clustering
+cluster_label_df2 = DF.from_csv!(Constants.get_clustering_label2_file_path())
+cluster_label_df2 = DF.mutate(cluster_label_df2, cluster: cluster + 1)
+
+#combine two dataframes - row-wise
+final_cluster_df = DF.concat_rows([cluster_label_df1, cluster_label_df2]) |> DF.select(["Participant ID", "cluster"])
+#DF.to_csv!(final_cluster_df, "final-profile-label.csv")
+```
+
+<!-- livebook:{"offset":40032,"stamp":{"token":"XCP.pGev50aYcoqe0Cb4RGHjQJJSFMQIDlgAxMnE766yWoTogbnGoECL7V5FM2We5smoOw6n6pyTNn4i4DePapWKig4tcFmjq8J8N6vbDA","version":2}} -->
