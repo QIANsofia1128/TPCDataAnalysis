@@ -33,7 +33,7 @@ shap_values = explainer.shap_values(X_test)
 print(shap_values.shape)
 
 # Print shape of SHAP values for class 1 (responders)
-print("SHAP values shape:", shap_values[:,:,1].shape)  # Should be (11294, 12)
+print("SHAP values shape:", shap_values[:,:,1].shape)  
 
 # Generate dependence plot
 shap.summary_plot(shap_values[:,:,1], X_test)
