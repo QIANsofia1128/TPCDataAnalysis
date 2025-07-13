@@ -15,7 +15,7 @@ Mix.install([
 ])
 ```
 
-## Prepare data for desision tree
+## 1. Prepare data for desision tree
 
 ```elixir
 Pythonx.uv_init("""
@@ -105,7 +105,7 @@ IO.puts("#Training samples: #{Evision.ML.TrainData.getNTrainSamples(dataset)}")
 IO.puts("#Test samples: #{Evision.ML.TrainData.getNTestSamples(dataset)}")
 ```
 
-## Random Tree Model - Evision module
+## 2. Random Tree Model - Evision module
 
 ```elixir
 rtree =
@@ -150,7 +150,7 @@ rtree =
 )
 ```
 
-## Decision Tree - Evision module
+## 3. Decision Tree - Evision module
 
 ```elixir
 dtree =
@@ -251,7 +251,7 @@ vl =
 Kino.VegaLite.new(vl)
 ```
 
-## Decision Tree using Python
+## 4. Decision Tree using Python
 
 ```elixir
 import Pythonx
@@ -289,7 +289,7 @@ print(features.head())
 """
 ```
 
-## ONE-HOT ENCODING
+## 5. One-Hot encoding
 
 ```elixir
 encoding_df =
@@ -410,7 +410,7 @@ print(tree_rules)
 """
 ```
 
-## Random Tree Forest using Python
+## 6. Random Tree Forest using Python
 
 ```elixir
 import Pythonx
