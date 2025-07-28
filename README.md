@@ -1,3 +1,5 @@
+Repository status = Archived
+
 # TPCDataAnalysis
 
 This Master thesis presents a Learning Analytics (LA) study conducted on RETOMadrID. The goal is to improve the platform by understanding students’ behavior using modern machine learning (ML) and data analysis techniques.
